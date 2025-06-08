@@ -46,7 +46,7 @@ class InstructGS2GSPipelineConfig(VanillaPipelineConfig):
     """(text) guidance scale for InstructPix2Pix"""
     image_guidance_scale: float = 1.5
     """image guidance scale for InstructPix2Pix"""
-    gs_steps: int = 2500
+    gs_steps: int = 500 #2500
     """how many GS steps between dataset updates"""
     diffusion_steps: int = 20
     """Number of diffusion steps to take for InstructPix2Pix"""
