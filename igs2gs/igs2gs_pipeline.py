@@ -30,12 +30,16 @@ from nerfstudio.pipelines.base_pipeline import (
 )
 from igs2gs.ip2p import InstructPix2Pix
 
+# imports for secret view editing
 import yaml
 from types import SimpleNamespace
+from torchvision.utils import save_image
 
 from igs2gs.ip2p_ptd import IP2P_PTD
 
 from igs2gs.ip2p_depth import InstructPix2Pix_depth
+
+from nerfstudio.engine.callbacks import TrainingCallbackAttributes
 
 
 @dataclass
@@ -136,14 +140,24 @@ class InstructGS2GSPipeline(VanillaPipeline):
         self.camera_secret, self.data_secret = self.datamanager.next_train_idx(secret_view_idx)
         self.original_image_secret = self.datamanager.original_cached_train[secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
         self.depth_image_secret = self.datamanager.original_cached_train[secret_view_idx]["depth"] # [bs, h, w]
-            
+    
+    def get_training_callbacks(self, attrs: TrainingCallbackAttributes):
+        # stash a reference to the Trainer
+        self.trainer = attrs.trainer
+        # now return whatever callbacks the base class wants
+        return super().get_training_callbacks(attrs)
 
     def get_train_loss_dict(self, step: int):
         """This function gets your training loss dict and performs image editing.
         Args:
             step: current iteration step to update sampler if using DDP (distributed)
         """
-      
+
+        ckpt_dir = self.trainer.checkpoint_dir
+        image_dir = ckpt_dir / "images"
+        if not image_dir.exists():
+            image_dir.mkdir(parents=True, exist_ok=True)
+    
         if ((step-1) % self.config.gs_steps) == 0:
             self.makeSquentialEdits = True
 
@@ -199,9 +213,14 @@ class InstructGS2GSPipeline(VanillaPipeline):
                 self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
                 data["image"] = edited_image.squeeze().permute(1,2,0)
 
+                # save edited image
+                if step % 100 == 0:
+                    image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                    save_image((image_save_non_secret).clamp(0, 1), image_dir / f'non_secret_{step}_image.png')
+
             loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
-            # update the secret view dataset
+            # ----------- update the secret view dataset ----------- 
             model_outputs_secret = self.model(self.camera_secret)
             metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
             loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
@@ -227,6 +246,12 @@ class InstructGS2GSPipeline(VanillaPipeline):
                 metrics_dict[f"secret_{k}"] = v
             for k, v in loss_dict_secret.items():
                 loss_dict[f"secret_{k}"] = v
+
+            # save edited image
+            if step % 100 == 0:
+                image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+                save_image((image_save_secret).clamp(0, 1), image_dir / f'secret_{step}_image.png')
+            # ----------- update the secret view dataset ----------- 
 
             #increment curr edit idx
             self.curr_edit_idx += 1
