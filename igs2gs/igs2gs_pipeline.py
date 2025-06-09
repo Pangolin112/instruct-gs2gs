@@ -141,6 +141,7 @@ class InstructGS2GSPipeline(VanillaPipeline):
         self.original_image_secret = self.datamanager.original_cached_train[secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
         self.depth_image_secret = self.datamanager.original_cached_train[secret_view_idx]["depth"] # [bs, h, w]
     
+    # add callback function to fetch the components from other parts of the training process.
     def get_training_callbacks(self, attrs: TrainingCallbackAttributes):
         # stash a reference to the Trainer
         self.trainer = attrs.trainer
@@ -157,8 +158,11 @@ class InstructGS2GSPipeline(VanillaPipeline):
         image_dir = ckpt_dir / "images"
         if not image_dir.exists():
             image_dir.mkdir(parents=True, exist_ok=True)
+
+        # print(step) # start from 30000
     
-        if ((step-1) % self.config.gs_steps) == 0:
+        # if ((step-1) % self.config.gs_steps) == 0:
+        if (step % self.config.gs_steps) == 0: # update also for the first step
             self.makeSquentialEdits = True
 
         if (not self.makeSquentialEdits):
@@ -254,6 +258,7 @@ class InstructGS2GSPipeline(VanillaPipeline):
             # ----------- update the secret view dataset ----------- 
 
             #increment curr edit idx
+            # and update all the images in the dataset
             self.curr_edit_idx += 1
             if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
                 self.curr_edit_idx = 0

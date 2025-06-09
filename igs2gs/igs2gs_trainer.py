@@ -57,9 +57,14 @@ class InstructGS2GSTrainer(Trainer):
             },
             ckpt_path,
         )
+
         # possibly delete old checkpoints
         if self.config.save_only_latest_checkpoint:
-            # delete everything else in the checkpoint folder
-            for f in self.checkpoint_dir.glob("*"):
-                if f != ckpt_path:
-                    f.unlink()
+            # # delete everything else in the checkpoint folder
+            # for f in self.checkpoint_dir.glob("*"):
+            #     if f != ckpt_path:
+            #         f.unlink()
+            # delete only old .ckpt files (won't touch images/ or other folders)
+            for ckpt in self.checkpoint_dir.glob("*.ckpt"):
+                if ckpt != ckpt_path:
+                    ckpt.unlink()
