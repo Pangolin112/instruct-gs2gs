@@ -54,7 +54,7 @@ class InstructGS2GSPipelineConfig(VanillaPipelineConfig):
     """(text) guidance scale for InstructPix2Pix"""
     image_guidance_scale: float = 1.5
     """image guidance scale for InstructPix2Pix"""
-    gs_steps: int = 500 #2500
+    gs_steps: int = 2500
     """how many GS steps between dataset updates"""
     diffusion_steps: int = 20
     """Number of diffusion steps to take for InstructPix2Pix"""
@@ -107,27 +107,28 @@ class InstructGS2GSPipeline(VanillaPipeline):
         config_path = 'config/config.yaml'
         with open(config_path, 'r') as file:
             cfg_dict = yaml.safe_load(file)
-        config_secret = SimpleNamespace(**cfg_dict)
+        self.config_secret = SimpleNamespace(**cfg_dict)
 
-        dtype = torch.float16
+        self.config_secret.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.dtype = torch.float16
 
         self.ip2p_ptd = IP2P_PTD(
-            dtype, 
-            torch.device(device), 
-            prompt=config_secret.prompt_2, 
-            t_dec=config_secret.t_dec, 
-            image_guidance_scale=config_secret.image_guidance_scale_ip2p_ptd, 
-            async_ahead_steps=config_secret.async_ahead_steps
+            self.dtype, 
+            self.config_secret.device, 
+            prompt=self.config_secret.prompt_2, 
+            t_dec=self.config_secret.t_dec, 
+            image_guidance_scale=self.config_secret.image_guidance_scale_ip2p_ptd, 
+            async_ahead_steps=self.config_secret.async_ahead_steps
         )
 
-        text_embeddings_ip2p = self.ip2p_ptd.text_embeddings_ip2p
+        self.text_embeddings_ip2p = self.ip2p_ptd.text_embeddings_ip2p
 
         # ip2p = InstructPix2Pix(device)
         self.ip2p_depth = InstructPix2Pix_depth(
-            dtype, 
-            torch.device(device), 
-            config_secret.render_size, 
-            config_secret.conditioning_scale
+            self.dtype, 
+            self.config_secret.device, 
+            self.config_secret.render_size, 
+            self.config_secret.conditioning_scale
         )
             
     
@@ -156,16 +157,30 @@ class InstructGS2GSPipeline(VanillaPipeline):
 
             depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
 
-            edited_image = self.ip2p.edit_image(
-                        self.text_embedding.to(self.ip2p_device),
-                        rendered_image.to(self.ip2p_device),
-                        original_image.to(self.ip2p_device),
-                        guidance_scale=self.config.guidance_scale,
-                        image_guidance_scale=self.config.image_guidance_scale,
-                        diffusion_steps=self.config.diffusion_steps,
-                        lower_bound=self.config.lower_bound,
-                        upper_bound=self.config.upper_bound,
-                    )
+            # edited_image = self.ip2p.edit_image(
+            #             self.text_embedding.to(self.ip2p_device),
+            #             rendered_image.to(self.ip2p_device),
+            #             original_image.to(self.ip2p_device),
+            #             guidance_scale=self.config.guidance_scale,
+            #             image_guidance_scale=self.config.image_guidance_scale,
+            #             diffusion_steps=self.config.diffusion_steps,
+            #             lower_bound=self.config.lower_bound,
+            #             upper_bound=self.config.upper_bound,
+            #         )
+            
+            # edit image using IP2P depth
+            edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+                self.text_embeddings_ip2p.to(self.config_secret.device),
+                (rendered_image / 2 + 0.5).to(self.dtype),
+                original_image.to(self.config_secret.device).to(self.dtype),
+                False, # is depth tensor
+                depth_image,
+                guidance_scale=self.config_secret.guidance_scale,
+                image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+                diffusion_steps=self.config_secret.t_dec,
+                lower_bound=self.config_secret.lower_bound,
+                upper_bound=self.config_secret.upper_bound,
+            )
 
             # resize to original image size (often not necessary)
             if (edited_image.size() != rendered_image.size()):
