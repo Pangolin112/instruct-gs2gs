@@ -85,19 +85,19 @@ class InstructGS2GSPipeline(VanillaPipeline):
     ):
         super().__init__(config, device, test_mode, world_size, local_rank)
         
-        # select device for InstructPix2Pix
-        self.ip2p_device = (
-            torch.device(device)
-            if self.config.ip2p_device is None
-            else torch.device(self.config.ip2p_device)
-        )
+        # # select device for InstructPix2Pix
+        # self.ip2p_device = (
+        #     torch.device(device)
+        #     if self.config.ip2p_device is None
+        #     else torch.device(self.config.ip2p_device)
+        # )
 
-        self.ip2p = InstructPix2Pix(self.ip2p_device, ip2p_use_full_precision=self.config.ip2p_use_full_precision)
+        # self.ip2p = InstructPix2Pix(self.ip2p_device, ip2p_use_full_precision=self.config.ip2p_use_full_precision)
 
-        # load base text embedding using classifier free guidance
-        self.text_embedding = self.ip2p.pipe._encode_prompt(
-            self.config.prompt, device=self.ip2p_device, num_images_per_prompt=1, do_classifier_free_guidance=True, negative_prompt=""
-        )
+        # # load base text embedding using classifier free guidance
+        # self.text_embedding = self.ip2p.pipe._encode_prompt(
+        #     self.config.prompt, device=self.ip2p_device, num_images_per_prompt=1, do_classifier_free_guidance=True, negative_prompt=""
+        # )
 
         # which image index we are editing
         self.curr_edit_idx = 0
@@ -130,8 +130,14 @@ class InstructGS2GSPipeline(VanillaPipeline):
             self.config_secret.render_size, 
             self.config_secret.conditioning_scale
         )
+
+        # secret data preparation
+        secret_view_idx = self.config_secret.secret_view_idx
+        self.camera_secret, self.data_secret = self.datamanager.next_train_idx(secret_view_idx)
+        self.original_image_secret = self.datamanager.original_cached_train[secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+        self.depth_image_secret = self.datamanager.original_cached_train[secret_view_idx]["depth"] # [bs, h, w]
             
-    
+
     def get_train_loss_dict(self, step: int):
         """This function gets your training loss dict and performs image editing.
         Args:
@@ -145,6 +151,7 @@ class InstructGS2GSPipeline(VanillaPipeline):
             camera, data = self.datamanager.next_train(step)
             model_outputs = self.model(camera)
             metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+            loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
         else:
             # get index
             idx = self.curr_edit_idx
@@ -168,28 +175,58 @@ class InstructGS2GSPipeline(VanillaPipeline):
             #             upper_bound=self.config.upper_bound,
             #         )
             
-            # edit image using IP2P depth
-            edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
-                self.text_embeddings_ip2p.to(self.config_secret.device),
-                (rendered_image / 2 + 0.5).to(self.dtype),
-                original_image.to(self.config_secret.device).to(self.dtype),
-                False, # is depth tensor
-                depth_image,
-                guidance_scale=self.config_secret.guidance_scale,
-                image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
-                diffusion_steps=self.config_secret.t_dec,
+            # edit image using IP2P depth when idx != secret_view_idx
+            if (idx != self.config_secret.secret_view_idx):
+                edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+                    self.text_embeddings_ip2p.to(self.config_secret.device),
+                    rendered_image.to(self.dtype),
+                    original_image.to(self.config_secret.device).to(self.dtype),
+                    False, # is depth tensor
+                    depth_image,
+                    guidance_scale=self.config_secret.guidance_scale,
+                    image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+                    diffusion_steps=self.config_secret.t_dec,
+                    lower_bound=self.config_secret.lower_bound,
+                    upper_bound=self.config_secret.upper_bound,
+                )
+
+                # resize to original image size (often not necessary)
+                if (edited_image.size() != rendered_image.size()):
+                    edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+                # write edited image to dataloader
+                edited_image = edited_image.to(original_image.dtype)
+                self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+                data["image"] = edited_image.squeeze().permute(1,2,0)
+
+            loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+            # update the secret view dataset
+            model_outputs_secret = self.model(self.camera_secret)
+            metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+            loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+            rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+            edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+                image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+                image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+                depth=self.depth_image_secret,
                 lower_bound=self.config_secret.lower_bound,
-                upper_bound=self.config_secret.upper_bound,
+                upper_bound=self.config_secret.upper_bound
             )
 
             # resize to original image size (often not necessary)
-            if (edited_image.size() != rendered_image.size()):
-                edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+            if (edited_image_secret.size() != rendered_image_secret.size()):
+                edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
 
             # write edited image to dataloader
-            edited_image = edited_image.to(original_image.dtype)
-            self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
-            data["image"] = edited_image.squeeze().permute(1,2,0)
+            edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+            self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+            self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+
+            for k, v in metrics_dict_secret.items():
+                metrics_dict[f"secret_{k}"] = v
+            for k, v in loss_dict_secret.items():
+                loss_dict[f"secret_{k}"] = v
 
             #increment curr edit idx
             self.curr_edit_idx += 1
@@ -197,8 +234,6 @@ class InstructGS2GSPipeline(VanillaPipeline):
                 self.curr_edit_idx = 0
                 self.makeSquentialEdits = False
 
-        loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
-        
         return model_outputs, loss_dict, metrics_dict
     
     def forward(self):

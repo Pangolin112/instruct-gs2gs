@@ -546,8 +546,8 @@ class IP2P_PTD(nn.Module):
 
     def edit_image_depth(
         self,
-        image: Float[Tensor, "BS 3 H W"],
-        image_cond: Float[Tensor, "BS 3 H W"],
+        image: Float[Tensor, "BS 3 H W"], # [0, 1]
+        image_cond: Float[Tensor, "BS 3 H W"], # [0, 1]
         depth: Float[Tensor, "BS H W"], # [0, 1], meter
         lower_bound: float = 0.70,
         upper_bound: float = 0.98
