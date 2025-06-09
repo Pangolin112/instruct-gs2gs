@@ -77,7 +77,7 @@ from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManag
 from nerfstudio.data.dataparsers.base_dataparser import DataparserOutputs
 from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
 from nerfstudio.data.datasets.base_dataset import InputDataset
-from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanagerConfig,FullImageDatamanager
+from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanagerConfig, FullImageDatamanager
 
 # from nerfstudio.data.utils.dataloaders import FixedIndicesEvalDataloader
 from nerfstudio.utils.misc import get_orig_class
@@ -119,6 +119,17 @@ class InstructGS2GSDataManager(FullImageDatamanager):
     ):
 
         super().__init__(config, device, test_mode, world_size, local_rank, **kwargs)
+
+        # add depth into the cache
+        depth_fnames = self.train_dataparser_outputs.metadata.get("depth_filenames", None)
+        if depth_fnames is not None:
+            # choose whether to keep CPU or move to GPU based on your cache_images setting
+            to_device = (lambda x: x.to(self.device)) if self.config.cache_images == "gpu" else (lambda x: x)
+            for sample, depth_path in zip(self.cached_train, depth_fnames):
+                depth_np = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED).astype(np.float32)
+                depth_t  = torch.from_numpy(depth_np)[None, ...]
+                sample["depth"] = to_device(depth_t)
+            
         # cache original training images for ip2p
         self.original_cached_train = deepcopy(self.cached_train)
         self.original_cached_eval = deepcopy(self.cached_eval)
@@ -132,6 +143,7 @@ class InstructGS2GSDataManager(FullImageDatamanager):
         Returns a Camera instead of raybundle"""
         data = deepcopy(self.cached_train[idx])
         data["image"] = data["image"].to(self.device)
+        data["depth"] = data["depth"].to(self.device)
 
         assert len(self.train_dataset.cameras.shape) == 1, "Assumes single batch dimension"
         camera = self.train_dataset.cameras[idx : idx + 1].to(self.device)
