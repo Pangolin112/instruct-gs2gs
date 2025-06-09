@@ -189,7 +189,7 @@ class IP2P_PTD(nn.Module):
         # self.ref_latent_path = './outputs/latent_face1.jpt_cond.pt' # japanese
         # self.ref_latent_path = './outputs/latent_face1.jpg_cond.pt' # snowed 
 
-        # don't use cond for DDIM inversion above, the results is just not stable
+        # don't use cond for DDIM inversion like above, the results are unstable
         self.ref_latent_path = 'latent_face1.jpg.pt'
         # self.ref_latent_path = 'latent_face2.jpg.pt'
         # self.ref_latent_path = 'latent_tum_white.png.pt'

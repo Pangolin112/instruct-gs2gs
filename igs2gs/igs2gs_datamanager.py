@@ -143,6 +143,7 @@ class InstructGS2GSDataManager(FullImageDatamanager):
         Returns a Camera instead of raybundle"""
         data = deepcopy(self.cached_train[idx])
         data["image"] = data["image"].to(self.device)
+        # add depth into the cache
         data["depth"] = data["depth"].to(self.device)
 
         assert len(self.train_dataset.cameras.shape) == 1, "Assumes single batch dimension"

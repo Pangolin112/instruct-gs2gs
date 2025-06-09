@@ -30,6 +30,14 @@ from nerfstudio.pipelines.base_pipeline import (
 )
 from igs2gs.ip2p import InstructPix2Pix
 
+import yaml
+from types import SimpleNamespace
+
+from igs2gs.ip2p_ptd import IP2P_PTD
+
+from igs2gs.ip2p_depth import InstructPix2Pix_depth
+
+
 @dataclass
 class InstructGS2GSPipelineConfig(VanillaPipelineConfig):
     """Configuration for pipeline instantiation"""
@@ -95,6 +103,32 @@ class InstructGS2GSPipeline(VanillaPipeline):
         self.curr_edit_idx = 0
         # whether we are doing regular GS updates or editing images
         self.makeSquentialEdits = False
+
+        config_path = 'config/config.yaml'
+        with open(config_path, 'r') as file:
+            cfg_dict = yaml.safe_load(file)
+        config_secret = SimpleNamespace(**cfg_dict)
+
+        dtype = torch.float16
+
+        self.ip2p_ptd = IP2P_PTD(
+            dtype, 
+            torch.device(device), 
+            prompt=config_secret.prompt_2, 
+            t_dec=config_secret.t_dec, 
+            image_guidance_scale=config_secret.image_guidance_scale_ip2p_ptd, 
+            async_ahead_steps=config_secret.async_ahead_steps
+        )
+
+        text_embeddings_ip2p = self.ip2p_ptd.text_embeddings_ip2p
+
+        # ip2p = InstructPix2Pix(device)
+        self.ip2p_depth = InstructPix2Pix_depth(
+            dtype, 
+            torch.device(device), 
+            config_secret.render_size, 
+            config_secret.conditioning_scale
+        )
             
     
     def get_train_loss_dict(self, step: int):
@@ -119,6 +153,8 @@ class InstructGS2GSPipeline(VanillaPipeline):
 
             original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
             rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+            depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
 
             edited_image = self.ip2p.edit_image(
                         self.text_embedding.to(self.ip2p_device),
