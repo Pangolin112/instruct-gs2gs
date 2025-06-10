@@ -80,7 +80,7 @@ seed: 99
 
 # prompts
 prompt_1: "a castle"
-prompt_2: "make it look like it just snowed"
+prompt_2: "make it a japanese style living room"
 a_prompt: ", best quality, high quality, extremely detailed, good geometry, high-res photo"
 n_prompt: "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
 
